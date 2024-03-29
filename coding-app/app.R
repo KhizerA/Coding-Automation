@@ -32,7 +32,7 @@ ui <- page_navbar(
     # Upload folder
     fileInput('file', 'Choose file to upload (.csv or .xlsx)',
               accept = c('.csv', '.xlsx')),
-    uiOutput('variables'), #Placeholder for rendering in server
+    uiOutput('variables') #Placeholder for rendering in server
   ),
   #Main body
   #First page of app
@@ -72,7 +72,8 @@ server <- function(input, output, session) {
     ext <- tools::file_ext(input$file$name)
     upload_file <- switch(ext,
                           csv = read_csv(input$file$datapath, 
-                                         show_col_types = FALSE),
+                                         show_col_types = FALSE,
+                                         locale = locale(encoding = "UTF-8")),
                           xlsx = read_xlsx(input$file$datapath,
                                            sheet = 1),
                           validate('Invalid file, please upload a .csv or .xlsx file'))
@@ -154,7 +155,6 @@ server <- function(input, output, session) {
                      locale = locale(encoding = "UTF-8")),
       xlsx = read_xlsx(input$file$datapath,
                        sheet = 1))
-    
     #Pre-defining output variables before loop
     output_data <- upload_file %>%
       rename(any_of(c(id = "ID"))) %>%
@@ -167,16 +167,33 @@ server <- function(input, output, session) {
     for (cbs in 1:counter$n) {
       input_ref <- input[[paste0('cb',cbs)]] #selected variables
       data <- output_data %>%
-        select(ID, input_ref) 
+        select(ID, input_ref) %>%
+        mutate_at(input_ref, as.character)
       old_names <- names(data)
       #Part 1: Producing a codebook
       pivoted <- data %>%
         pivot_longer(-ID) %>% #Pivoting to long for ease of summation
         filter(value != "")
       min_mentions <- input[[paste0('num_codes',cbs)]] #user inputed minumum number of mentions
+      #Creating a df of undesirable stop words
+      my_stopwords <- stop_words %>% 
+        filter(lexicon == 'snowball')
+      #A function to detect n-grams comprised solely of stop words
+      detect_stopwords_ngram <- function(ngram_col) {
+        result <- c()
+        for (x in ngram_col) { 
+          temp <- str_split(x, " ") %>%
+            unlist()
+          result <- result %>%
+            append(!all(temp %in% my_stopwords$word))
+        }
+        result
+      }
+      #Producing a df of ngrams and filtering out stop words
       ngrams <- pivoted %>%
         unnest_ngrams(output = word, input = value, n_min = 1) %>%
-        anti_join(stop_words, by = "word") #find a better way to filter out stop_words from n-grams
+        anti_join(stop_words, by = "word") %>%
+        filter(detect_stopwords_ngram(word)) 
       freq_table <- ngrams %>% #frequency table of n_grams
         count(word, sort = T) %>%
         filter(n >= min_mentions) %>%
@@ -267,7 +284,7 @@ server <- function(input, output, session) {
         left_join(df, by = 'ID') %>%
         relocate(starts_with(coded_var_names), .after = coded_var_names) #moving codes next to their respective question
       #Frequency tables for printing
-      table_to_add <- adj_table %>%
+      table_to_add <- adj_table %>% #Outdated count, need to use a more recent df 
         mutate(Response = str_to_sentence(Response), 
                Frequency = as.integer(Frequency))
       frequency_tables <- frequency_tables %>%

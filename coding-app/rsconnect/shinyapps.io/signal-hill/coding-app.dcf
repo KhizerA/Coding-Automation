@@ -1,0 +1,10 @@
+name: coding-app
+title:
+username: signal-hill
+account: signal-hill
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 11617259
+bundleId: 8431861
+url: https://signal-hill.shinyapps.io/coding-app/
+version: 1
