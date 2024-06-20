@@ -233,12 +233,12 @@ server <- function(input, output, session) {
           by = c(word = 'Response'),
           mode = 'left',
           method = 'jw', 
-          max_dist = 1 - (0.01 * input[[paste0('param',cbs)]]), #Using the user inputted match strenght
+          max_dist = 1 - (0.01 * input[[paste0('param',cbs)]]), #Using the user inputted match strength
           ignore_case = TRUE,
           distance_col = 'distance') %>%
-        distinct(ID, Code, .keep_all = TRUE) %>% #Keeping one occurance of a code per person
+        distinct(ID, Code, .keep_all = TRUE) %>% #Keeping one occurrence of a code per person
         arrange(distance) %>%
-        distinct(ID, word, .keep_all = TRUE) #Keeping one occurance of an n-gram per person
+        distinct(ID, word, .keep_all = TRUE) #Keeping one occurrence of an n-gram per person
       fuzzy_ngrams <- fuzzy_ngrams %>%
         drop_na(Code) %>%
         arrange(ID, name) %>%
@@ -284,9 +284,12 @@ server <- function(input, output, session) {
         left_join(df, by = 'ID') %>%
         relocate(starts_with(coded_var_names), .after = coded_var_names) #moving codes next to their respective question
       #Frequency tables for printing
-      table_to_add <- adj_table %>% #Outdated count, need to use a more recent df 
+      table_to_add <- fuzzy_ngrams %>%
+        count(Response) %>%
+        rename(Frequency = n) %>%
         mutate(Response = str_to_sentence(Response), 
-               Frequency = as.integer(Frequency))
+               Frequency = as.integer(Frequency)) %>%
+        arrange(desc(Frequency))
       frequency_tables <- frequency_tables %>%
         append(list(table_to_add)) 
       #Variables to highlight in excel output 
