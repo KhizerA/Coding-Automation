@@ -14,7 +14,9 @@ library(tidytext)
 library(openxlsx)
 library(fuzzyjoin)
 library(readxl)
+library(DTedit)
 options(shiny.maxRequestSize = 10 * 1024^2) #Can be flexible to upload bigger files
+
 
 ## UI Function ##
 ui <- page_navbar(
@@ -36,29 +38,37 @@ ui <- page_navbar(
   ),
   #Main body
   #First page of app
-    nav_panel_hidden(
-      value = 'page1',
-      uiOutput('boxes'), #Placeholder for rendering in server
-      layout_columns(col_widths = c(1,1,-7,3),
-        shinyjs::hidden(actionBttn(inputId = 'add_btn', label = 'Add', icon = icon('plus'),
-                                   style = "material-circle", color = 'success')), #To add codebook
-        shinyjs::hidden(actionBttn(inputId = 'rm_btn', label = 'Remove', icon = icon('minus'),
-                   style = "material-circle", color = 'danger')), #To remove codebook
-        shinyjs::hidden(actionBttn(inputId = 'code', label = 'Code', icon = icon('chevron-right'),
-                                   style = 'gradient', color = 'primary'))) #To execute program
-      ),
+  nav_panel_hidden(
+    value = 'page1',
+    uiOutput('boxes'), #Placeholder for rendering in server
+    layout_columns(col_widths = c(1,1,-7,3),
+      shinyjs::hidden(actionBttn(inputId = 'add_btn', label = 'Add', icon = icon('plus'),
+                                 style = "material-circle", color = 'success')), #To add codebook
+      shinyjs::hidden(actionBttn(inputId = 'rm_btn', label = 'Remove', icon = icon('minus'),
+                 style = "material-circle", color = 'danger')), #To remove codebook
+      shinyjs::hidden(actionBttn(inputId = 'code', label = 'Next', icon = icon('chevron-right'),
+                                 style = 'gradient', color = 'primary'))) #To execute program
+    ),
   #Second page
-    nav_panel_hidden(
-      value = 'page2',
-      shinyjs::hidden(downloadBttn(outputId = 'download', label = 'Download Data', 
-                   style = 'gradient')), #Download final data button
-      #Card tabs for printing frequency tables
-      navset_card_tab(
-        id = 'p2_tabs',
-        title = tags$b('Data Summary')
-        )
+  nav_panel_hidden(
+    value = 'page2',
+    shinyjs::hidden(actionBttn(inputId = 'exec_coding', label = 'Execute Coding', 
+                               icon = icon('chevron-right'),
+                               style = 'gradient', color = 'primary')), #Execute coding button
+    #printing frequency tables
+    uiOutput('codebook_print')
+  ),
+  #Third page 
+  nav_panel_hidden(
+    value = 'page3',
+    shinyjs::hidden(downloadBttn(outputId = 'download', label = 'Download Data', 
+                                 style = 'gradient')), #Download final data button
+    navset_card_tab(
+      id = 'p3_tabs',
+      title = tags$b('Data Summary'),
+      )
     )
-)
+  )
 
 ## Server Function ##
 server <- function(input, output, session) { 
@@ -85,9 +95,9 @@ server <- function(input, output, session) {
                              options = sortable_options(sort = FALSE,
                                                         group = "mygroup"))
     output$variables <- renderUI({master_list})
-    #Loading in add and remove buttons  
-    shinyjs::show('add_btn')
-    shinyjs::show('rm_btn')
+    #Loading in add and remove buttons # DTedit is buggy with multiple pages
+    #shinyjs::show('add_btn')
+    #shinyjs::show('rm_btn')
     
     ## Codebook manipulation functions
     # function to save prior inputs to work around reactive resetting
@@ -107,7 +117,7 @@ server <- function(input, output, session) {
       if (n > 0) { 
           lapply(seq_len(n), function(i) { 
             isolate({ #workaround to stop reactive resetting of inputs
-              card(card_header(tags$b(paste('Codebook', i))),
+              card(card_header(tags$b(paste('Coding Paramters'))),
                    layout_columns(
                      col_widths = c(8,4), #splitting in to two columns
                      rank_list(input_id = paste0('cb', i),
@@ -133,7 +143,7 @@ server <- function(input, output, session) {
     lapply(seq_len(counter$n), function(i) {input[[paste0('cb', i)]]}) #Calling all codebook input fields
   }, {
     eval <- lapply(
-      seq_len(counter$n), function(i) {!is_empty(input[[paste0('cb', i)]])}) #Making sure none of them are mepty
+      seq_len(counter$n), function(i) {!is_empty(input[[paste0('cb', i)]])}) #Making sure none of them are empty
     #If non-empty, display the execute button
     if (all(eval == TRUE)) {
       shinyjs::show('code')} else {
@@ -223,16 +233,45 @@ server <- function(input, output, session) {
                Frequency = n) 
       #Defining the codebook
       codebook <- data.frame(
-        Response = adj_table$Response,
-        Code = c(1:nrow(adj_table)))
+        Code = c(1:nrow(adj_table)),
+        Response = adj_table$Response)
+      #Frequency tables for printing
+      table_to_add <- codebook %>%
+        mutate(Response = str_to_sentence(Response), 
+               Code = as.integer(Code)) 
+    }
+    #Editable codebook 
+    final_codebook <- dtedit(
+     input, output,
+     name = 'codebook_print',
+     thedata = table_to_add,
+     defaultPageLength = 20,
+     show.copy = FALSE)
+    
+    shinyjs::show('exec_coding')
+    # Remove loading screen
+    removeModal() 
+    
+    ## Coding execution
+    observeEvent(input$exec_coding, {
+      #Pulling up the loading screen
+      showModal(modalDialog('Loading...', footer = NULL))
+      #Going to the next page
+      nav_select(id = 'app', selected = 'page3')
+      #Cleaning codebook for continuity 
+      updated_codebook <- final_codebook$thedata %>%
+        mutate(Code = as.integer(Code)) %>%
+        arrange(Code) %>%
+        mutate(Code = accumulate(Code, ~ifelse(is.na(.y), .x + 1, .y)) %>%
+                 accumulate(~ifelse((.y-.x>1) & (.y<=90), .x + 1, .y)))
       #Part 2: coding execution
       #fuzzy matching n-gram data with codebook
       fuzzy_ngrams <- ngrams %>%
         stringdist_join(
-          codebook,
+          updated_codebook,
           by = c(word = 'Response'),
           mode = 'left',
-          method = 'jw', 
+          method = 'jw',
           max_dist = 1 - (0.01 * input[[paste0('param',cbs)]]), #Using the user inputted match strength
           ignore_case = TRUE,
           distance_col = 'distance') %>%
@@ -265,19 +304,28 @@ server <- function(input, output, session) {
         pivot_wider(id_cols = ID, names_from = title, values_from = Code) %>%
         select(gtools::mixedsort(colnames(.)))
       ## Part 3: merges
-      #merging codebooks in to master
+      #merging codebooks in to master data
       coded_var_names <- old_names[!old_names %in% 'ID']
-      codebook <- codebook %>%
-        mutate(Response = str_to_sentence(Response)) 
-      names(codebook)[1] <- coded_var_names %>%
-        paste(collapse = " ") %>%
-        paste0("_", "Response")
-      names(codebook)[2] <- coded_var_names %>%
+      updated_codebook <- updated_codebook %>%
+        mutate(Response = str_to_sentence(Response))
+      for (i in 1:nrow(updated_codebook)) { 
+        crCode = updated_codebook$Code[i]
+        temp_cb <- updated_codebook %>%
+          filter(Code == crCode) 
+        updated_codebook$Response[i] <- paste(temp_cb$Response, collapse = " / ")
+      }
+      updated_codebook <- updated_codebook %>%
+        distinct(Code, .keep_all = TRUE)
+      legacy_codebook <- updated_codebook
+      names(updated_codebook)[1] <- coded_var_names %>%
         paste(collapse = " ") %>%
         paste0("_", "Code")
+      names(updated_codebook)[2] <- coded_var_names %>%
+        paste(collapse = " ") %>%
+        paste0("_", "Response")
       output_codebook <- output_codebook %>%
         rownames_to_column() %>%
-        full_join(codebook %>% rownames_to_column, by = "rowname") %>%
+        full_join(updated_codebook %>% rownames_to_column, by = "rowname") %>%
         select(-rowname)
       #merging survey data to master
       output_data <- output_data %>%
@@ -285,34 +333,36 @@ server <- function(input, output, session) {
         relocate(starts_with(coded_var_names), .after = coded_var_names) #moving codes next to their respective question
       #Frequency tables for printing
       table_to_add <- fuzzy_ngrams %>%
-        count(Response) %>%
+        count(Code) %>%
         rename(Frequency = n) %>%
-        mutate(Response = str_to_sentence(Response), 
+        left_join(legacy_codebook, by = "Code") %>%
+        select(Response, Frequency) %>%
+        mutate(Response = str_to_sentence(Response),
                Frequency = as.integer(Frequency)) %>%
         arrange(desc(Frequency))
       frequency_tables <- frequency_tables %>%
-        append(list(table_to_add)) 
-      #Variables to highlight in excel output 
+        append(list(table_to_add))
+      #Variables to highlight in excel output
       highlight_vars <- highlight_vars %>%
         append(names(df)) %>%
-        str_subset('ID', negate = TRUE) #keeping all variables except ID 
-    }
+        str_subset('ID', negate = TRUE) #keeping all variables except ID
+
     ##Coding done
-    
+
     #function to print out frequency tables for review
     lapply(seq_len(length(frequency_tables)), function(i) {
-      nav_insert(id = 'p2_tabs', select = TRUE,
-                 nav_panel(title = paste0("Codebook", " ", i), 
+      nav_insert(id = 'p3_tabs', select = TRUE,
+                 nav_panel(title = '_',
                            layout_columns(
                              col_widths = c(-1, 10, -1),
                              renderTable(frequency_tables[[i]],
                                          striped = T, bordered = T, hover = T,
                                          spacing = 'm'))))
-      })
-    
+    })
+
     ##Preparing data for export
     output_data <- output_data %>%
-      select(-ID) 
+      select(-ID)
     # Hotfix I don't understand to prevent encoding errors
     is_chr <- vapply(output_data, inherits, what = "character", NA)
     output_data[is_chr] <- lapply(output_data[is_chr], iconv, to = "UTF-8")
@@ -331,7 +381,7 @@ server <- function(input, output, session) {
              cols = match(highlight_vars, names(output_data)), #all variables to highlight
              rows = 1:nrow(output_data),
              gridExpand = TRUE)
-    #Download button functionality 
+    #Download button functionality
     output$download <- downloadHandler(
       filename = function() {
         paste0(tools::file_path_sans_ext(input$file$name), "_coded.xlsx")
@@ -341,12 +391,14 @@ server <- function(input, output, session) {
       }
     )
     shinyjs::show('download_bttn')
-    # Remove loading screen
+    #Remove loading screen
     removeModal() 
     })
+  })
   }
 
 shinyApp(ui, server)
+
 
 ## References ##
 #https://stackoverflow.com/questions/31454185/how-to-add-remove-input-fields-dynamically-by-a-button-in-shiny
